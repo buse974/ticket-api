@@ -44,8 +44,7 @@ export function createApp(database: Database, broadcast: BroadcastFn) {
   app.get(
     "/docs",
     apiReference({
-      spec: { url: "/openapi.json" },
-      theme: "default",
+      url: "/openapi.json",
     }),
   );
 
