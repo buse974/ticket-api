@@ -137,6 +137,16 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   const app = new Hono();
   const { db, schema } = database;
 
+  // Helper: get professionalId from userId (JWT sub contains userId)
+  async function getProfessionalId(userId: number): Promise<number | null> {
+    const [user] = await (db as any)
+      .select({ professionalId: schema.users.professionalId })
+      .from(schema.users)
+      .where(eq(schema.users.id, userId))
+      .limit(1);
+    return user?.professionalId ?? null;
+  }
+
   // ============================================
   // AUTHENTICATED ROUTES (Professional)
   // ============================================
@@ -144,7 +154,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   // Get all queues for authenticated professional
   app.get("/", jwtMiddleware, async (c) => {
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     const queues = await (db as any)
       .select()
@@ -179,7 +193,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     zValidator("json", createQueueSchema),
     async (c) => {
       const payload = c.get("jwtPayload");
-      const professionalId = parseInt(payload.sub as string, 10);
+      const userId = parseInt(payload.sub as string, 10);
+      const professionalId = await getProfessionalId(userId);
+      if (!professionalId) {
+        return c.json({ error: "User not found" }, 401);
+      }
       const { name } = c.req.valid("json");
 
       // Get professional's plan
@@ -233,7 +251,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     async (c) => {
       const queueId = parseInt(c.req.param("id"), 10);
       const payload = c.get("jwtPayload");
-      const professionalId = parseInt(payload.sub as string, 10);
+      const userId = parseInt(payload.sub as string, 10);
+      const professionalId = await getProfessionalId(userId);
+      if (!professionalId) {
+        return c.json({ error: "User not found" }, 401);
+      }
       const updates = c.req.valid("json");
 
       // Verify ownership
@@ -265,7 +287,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.delete("/:id", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
@@ -294,7 +320,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.get("/:id/stats", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
@@ -320,7 +350,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.post("/:id/complete", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
@@ -402,7 +436,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.post("/:id/no-show", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
@@ -484,7 +522,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.post("/:id/call-next", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
@@ -556,7 +598,11 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
   app.post("/:id/reset", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
     const payload = c.get("jwtPayload");
-    const professionalId = parseInt(payload.sub as string, 10);
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
 
     // Verify ownership
     const [queue] = await (db as any)
