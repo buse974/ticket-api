@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { apiReference } from "@scalar/hono-api-reference";
 import { createAuthRoutes } from "./routes/auth.js";
 import { createQueueRoutes, type BroadcastFn } from "./routes/queue.js";
 import { createProfessionalRoutes } from "./routes/professional.js";
 import type { Database } from "./db/index.js";
+import { openApiSpec } from "./openapi.js";
 
 export function createApp(database: Database, broadcast: BroadcastFn) {
   const app = new Hono();
@@ -34,6 +36,18 @@ export function createApp(database: Database, broadcast: BroadcastFn) {
 
   // Health check
   app.get("/health", (c) => c.json({ status: "ok" }));
+
+  // OpenAPI spec
+  app.get("/openapi.json", (c) => c.json(openApiSpec));
+
+  // API Documentation (Swagger UI alternative)
+  app.get(
+    "/docs",
+    apiReference({
+      spec: { url: "/openapi.json" },
+      theme: "default",
+    }),
+  );
 
   // Routes
   app.route("/api/auth", createAuthRoutes(database));
