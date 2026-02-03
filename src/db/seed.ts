@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { createMysqlDb } from "./index.js";
+import { createDb } from "./index.js";
 import { hashPassword } from "../services/auth.service.js";
 import { eq } from "drizzle-orm";
 
@@ -11,7 +11,7 @@ async function seed() {
     throw new Error("DATABASE_URL is required");
   }
 
-  const database = await createMysqlDb(databaseUrl);
+  const database = await createDb(databaseUrl);
   const { db, schema } = database;
 
   // Check if demo user already exists
@@ -30,11 +30,14 @@ async function seed() {
   }
 
   // 1. Create demo professional (the company)
-  const professionalResult = await db.insert(schema.professionals).values({
-    companyName: "Salon Martin",
-    plan: "pro", // demo with pro plan
-  });
-  const professionalId = professionalResult[0].insertId;
+  const [professional] = await db
+    .insert(schema.professionals)
+    .values({
+      companyName: "Salon Martin",
+      plan: "pro",
+    })
+    .returning({ id: schema.professionals.id });
+  const professionalId = professional.id;
   console.log("🏢 Professional account 'Salon Martin' created.");
 
   // 2. Create a user for that professional
@@ -43,7 +46,7 @@ async function seed() {
     professionalId,
     email: "demo@byewait.fr",
     password: hashedPassword,
-    name: "Jean Martin", // Owner's name
+    name: "Jean Martin",
     role: "owner",
   });
   console.log("👤 Owner user 'Jean Martin' created.");

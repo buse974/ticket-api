@@ -1,135 +1,123 @@
 import {
-  mysqlTable,
-  int,
+  pgTable,
+  serial,
+  integer,
   varchar,
   timestamp,
   text,
   boolean,
-  mysqlEnum,
-} from "drizzle-orm/mysql-core";
+  pgEnum,
+} from "drizzle-orm/pg-core";
 
 // ===========================================
-// MySQL Schema - Byewait
+// PostgreSQL Schema - Byewait
 // ===========================================
 
-// Plans disponibles
-export const planEnum = mysqlEnum("plan", ["free", "pro"]);
+// Enums
+export const roleEnum = pgEnum("role", ["owner", "staff"]);
+export const ticketStatusEnum = pgEnum("ticket_status", [
+  "waiting",
+  "current",
+  "completed",
+  "no_show",
+]);
 
 // Professionnels (comptes principaux/entreprises)
-export const professionals = mysqlTable("professionals", {
-  id: int("id").primaryKey().autoincrement(),
+export const professionals = pgTable("professionals", {
+  id: serial("id").primaryKey(),
   companyName: varchar("company_name", { length: 255 }).notNull(),
   plan: varchar("plan", { length: 10 }).notNull().default("free"), // 'free' ou 'pro'
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // Utilisateurs (employés des professionnels)
-export const users = mysqlTable("users", {
-  id: int("id").primaryKey().autoincrement(),
-  professionalId: int("professional_id")
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
+  professionalId: integer("professional_id")
     .notNull()
     .references(() => professionals.id, { onDelete: "cascade" }),
   email: varchar("email", { length: 255 }).notNull().unique(),
   password: varchar("password", { length: 255 }).notNull(),
   name: varchar("name", { length: 255 }).notNull(),
-  role: mysqlEnum("role", ["owner", "staff"]).notNull().default("staff"),
+  role: roleEnum("role").notNull().default("staff"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // Clients (comptes optionnels pour les utilisateurs finaux)
-export const clients = mysqlTable("clients", {
-  id: int("id").primaryKey().autoincrement(),
+export const clients = pgTable("clients", {
+  id: serial("id").primaryKey(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   password: varchar("password", { length: 255 }).notNull(),
   name: varchar("name", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // Files d'attente (multi-files par professionnel)
-export const queues = mysqlTable("queues", {
-  id: int("id").primaryKey().autoincrement(),
-  professionalId: int("professional_id")
+export const queues = pgTable("queues", {
+  id: serial("id").primaryKey(),
+  professionalId: integer("professional_id")
     .notNull()
     .references(() => professionals.id, { onDelete: "cascade" }),
-  name: varchar("name", { length: 100 }).notNull(), // ex: "Coupe Homme", "Coloration"
-  slug: varchar("slug", { length: 100 }).notNull().unique(), // URL friendly, unique globalement
-  currentNumber: int("current_number").notNull().default(0),
-  nextTicket: int("next_ticket").notNull().default(1),
-  isActive: boolean("is_active").notNull().default(true), // file ouverte ou fermée
-  allowRemoteBooking: boolean("allow_remote_booking").notNull().default(true), // réservation à distance
+  name: varchar("name", { length: 100 }).notNull(),
+  slug: varchar("slug", { length: 100 }).notNull().unique(),
+  currentNumber: integer("current_number").notNull().default(0),
+  nextTicket: integer("next_ticket").notNull().default(1),
+  isActive: boolean("is_active").notNull().default(true),
+  allowRemoteBooking: boolean("allow_remote_booking").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
-
-// Statuts des tickets
-export const ticketStatusEnum = mysqlEnum("ticket_status", [
-  "waiting", // en attente
-  "current", // en cours (appelé)
-  "completed", // terminé
-  "no_show", // absent
-]);
 
 // Tickets
-export const tickets = mysqlTable("tickets", {
-  id: int("id").primaryKey().autoincrement(),
-  queueId: int("queue_id")
+export const tickets = pgTable("tickets", {
+  id: serial("id").primaryKey(),
+  queueId: integer("queue_id")
     .notNull()
     .references(() => queues.id, { onDelete: "cascade" }),
-  clientId: int("client_id").references(() => clients.id, {
+  clientId: integer("client_id").references(() => clients.id, {
     onDelete: "set null",
-  }), // Optionnel
-  number: int("number").notNull(),
-  status: varchar("status", { length: 20 }).notNull().default("waiting"), // waiting, current, completed, no_show
-
-  // Tracking client
-  clientIp: varchar("client_ip", { length: 45 }), // IPv6 max length
-  isRemote: boolean("is_remote").notNull().default(false), // true si réservé à distance
-
-  // Push notifications
+  }),
+  number: integer("number").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("waiting"),
+  clientIp: varchar("client_ip", { length: 45 }),
+  isRemote: boolean("is_remote").notNull().default(false),
   pushSubscription: text("push_subscription"),
-
-  // Timestamps pour calcul des stats
-  createdAt: timestamp("created_at").defaultNow().notNull(), // prise du ticket
-  calledAt: timestamp("called_at"), // moment où le numéro est appelé (devient "current")
-  completedAt: timestamp("completed_at"), // moment où terminé ou no_show
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  calledAt: timestamp("called_at"),
+  completedAt: timestamp("completed_at"),
 });
 
-// Tracking anti-abus par IP (réservations à distance)
-export const ipTracking = mysqlTable("ip_tracking", {
-  id: int("id").primaryKey().autoincrement(),
-  queueId: int("queue_id")
+// Tracking anti-abus par IP
+export const ipTracking = pgTable("ip_tracking", {
+  id: serial("id").primaryKey(),
+  queueId: integer("queue_id")
     .notNull()
     .references(() => queues.id, { onDelete: "cascade" }),
   clientIp: varchar("client_ip", { length: 45 }).notNull(),
-  ticketCount: int("ticket_count").notNull().default(1), // nombre de tickets pris ce jour
-  date: varchar("date", { length: 10 }).notNull(), // format YYYY-MM-DD
+  ticketCount: integer("ticket_count").notNull().default(1),
+  date: varchar("date", { length: 10 }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
-// Stats journalières par file (pour historique - plan Pro)
-export const dailyStats = mysqlTable("daily_stats", {
-  id: int("id").primaryKey().autoincrement(),
-  queueId: int("queue_id")
+// Stats journalières par file
+export const dailyStats = pgTable("daily_stats", {
+  id: serial("id").primaryKey(),
+  queueId: integer("queue_id")
     .notNull()
     .references(() => queues.id, { onDelete: "cascade" }),
-  date: varchar("date", { length: 10 }).notNull(), // format YYYY-MM-DD
-
-  // Compteurs
-  totalTickets: int("total_tickets").notNull().default(0),
-  completedTickets: int("completed_tickets").notNull().default(0),
-  noShowTickets: int("no_show_tickets").notNull().default(0),
-  remoteTickets: int("remote_tickets").notNull().default(0), // tickets pris à distance
-
-  // Temps moyens en secondes
-  avgWaitTime: int("avg_wait_time"), // temps moyen entre création et appelé
-  avgServiceTime: int("avg_service_time"), // temps moyen entre appelé et terminé
-
+  date: varchar("date", { length: 10 }).notNull(),
+  totalTickets: integer("total_tickets").notNull().default(0),
+  completedTickets: integer("completed_tickets").notNull().default(0),
+  noShowTickets: integer("no_show_tickets").notNull().default(0),
+  remoteTickets: integer("remote_tickets").notNull().default(0),
+  avgWaitTime: integer("avg_wait_time"),
+  avgServiceTime: integer("avg_service_time"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // ===========================================
@@ -148,7 +136,7 @@ export const PLAN_LIMITS = {
 } as const;
 
 export const ANTI_ABUSE_LIMITS = {
-  maxTicketsPerIpPerDay: 2, // max 2 tickets par IP par jour par file
+  maxTicketsPerIpPerDay: 2,
 } as const;
 
 // ===========================================
@@ -176,7 +164,6 @@ export type NewIpTracking = typeof ipTracking.$inferInsert;
 export type DailyStat = typeof dailyStats.$inferSelect;
 export type NewDailyStat = typeof dailyStats.$inferInsert;
 
-// Types utilitaires
 export type UserRole = "owner" | "staff";
 export type TicketStatus = "waiting" | "current" | "completed" | "no_show";
 export type PlanType = "free" | "pro";

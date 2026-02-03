@@ -1,14 +1,14 @@
 import { serve } from "@hono/node-server";
 import { WebSocket } from "ws";
-import { createMysqlDb } from "./db/index.js";
+import { createDb } from "./db/index.js";
 import { createApp } from "./app.js";
 import { setupWebSocket, createBroadcast } from "./websocket.js";
 import { env } from "./env.js";
 
 async function main() {
   // Initialize database
-  const database = await createMysqlDb(env.DATABASE_URL);
-  console.log("Connected to MySQL database");
+  const database = await createDb(env.DATABASE_URL);
+  console.log("Connected to PostgreSQL database");
 
   // WebSocket connections store
   const wsConnections = new Map<number, Set<WebSocket>>();
