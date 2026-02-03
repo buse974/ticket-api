@@ -195,17 +195,20 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
 
       // Create queue
       const slug = generateSlug(name);
-      const result = await (db as any).insert(schema.queues).values({
-        professionalId,
-        name,
-        slug,
-        currentNumber: 0,
-        nextTicket: 1,
-        isActive: true,
-        allowRemoteBooking: true,
-      });
+      const [newQueue] = await (db as any)
+        .insert(schema.queues)
+        .values({
+          professionalId,
+          name,
+          slug,
+          currentNumber: 0,
+          nextTicket: 1,
+          isActive: true,
+          allowRemoteBooking: true,
+        })
+        .returning({ id: schema.queues.id });
 
-      const queueId = result[0]?.insertId;
+      const queueId = newQueue.id;
 
       return c.json(
         {
@@ -749,16 +752,19 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     const ticketNumber = queue.nextTicket;
 
     // Create ticket
-    const result = await (db as any).insert(schema.tickets).values({
-      queueId,
-      number: ticketNumber,
-      status: "waiting",
-      clientIp: isRemote ? clientIp : null,
-      isRemote,
-      pushSubscription: pushSubscription || null,
-    });
+    const [newTicket] = await (db as any)
+      .insert(schema.tickets)
+      .values({
+        queueId,
+        number: ticketNumber,
+        status: "waiting",
+        clientIp: isRemote ? clientIp : null,
+        isRemote,
+        pushSubscription: pushSubscription || null,
+      })
+      .returning({ id: schema.tickets.id });
 
-    const ticketId = result[0]?.insertId;
+    const ticketId = newTicket.id;
 
     // Increment next ticket number
     await (db as any)

@@ -51,32 +51,30 @@ export function createAuthRoutes(database: Database) {
     }
 
     // Create professional
-    const professionalResult = await (db as any)
+    const [professional] = await (db as any)
       .insert(schema.professionals)
       .values({
-        companyName: name, // Use name for company name
+        companyName: name,
         plan: "free",
-      });
+      })
+      .returning({ id: schema.professionals.id });
 
-    const professionalId =
-      "insertId" in professionalResult[0]
-        ? professionalResult[0].insertId
-        : (professionalResult[0]?.id ?? professionalResult.lastInsertRowid);
+    const professionalId = professional.id;
 
     // Create user
     const hashedPassword = await hashPassword(password);
-    const userResult = await (db as any).insert(schema.users).values({
-      professionalId,
-      email,
-      password: hashedPassword,
-      name,
-      role: "owner",
-    });
+    const [user] = await (db as any)
+      .insert(schema.users)
+      .values({
+        professionalId,
+        email,
+        password: hashedPassword,
+        name,
+        role: "owner",
+      })
+      .returning({ id: schema.users.id });
 
-    const userId =
-      "insertId" in userResult[0]
-        ? userResult[0].insertId
-        : (userResult[0]?.id ?? userResult.lastInsertRowid);
+    const userId = user.id;
 
     // Create default queue for the professional
     const defaultQueueName = "File principale";
@@ -96,7 +94,7 @@ export function createAuthRoutes(database: Database) {
     });
 
     // Get created professional for response
-    const [professional] = await (db as any)
+    const [professionalData] = await (db as any)
       .select({
         id: schema.professionals.id,
         companyName: schema.professionals.companyName,
@@ -114,10 +112,10 @@ export function createAuthRoutes(database: Database) {
       {
         token,
         professional: {
-          id: professional.id,
+          id: professionalData.id,
           email: email,
-          name: professional.companyName,
-          plan: professional.plan,
+          name: professionalData.companyName,
+          plan: professionalData.plan,
         },
       },
       201,
@@ -156,7 +154,6 @@ export function createAuthRoutes(database: Database) {
       .where(eq(schema.professionals.id, user.professionalId));
 
     if (!professional) {
-      // This would indicate data inconsistency
       return c.json(
         { error: "Could not find associated professional account." },
         500,
@@ -165,7 +162,7 @@ export function createAuthRoutes(database: Database) {
 
     // 4. Create token
     const token = await createToken({
-      sub: user.id, // Use user ID for token subject
+      sub: user.id,
       email: user.email,
     });
 
@@ -174,8 +171,8 @@ export function createAuthRoutes(database: Database) {
       token,
       professional: {
         id: professional.id,
-        email: user.email, // email is on user table
-        name: professional.companyName, // name is companyName on professionals table
+        email: user.email,
+        name: professional.companyName,
         plan: professional.plan,
       },
     });
