@@ -861,6 +861,37 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     );
   });
 
+  // Cancel ticket (public)
+  app.post("/:queueId/ticket/:ticketId/cancel", async (c) => {
+    const queueId = parseInt(c.req.param("queueId"), 10);
+    const ticketId = parseInt(c.req.param("ticketId"), 10);
+
+    const [ticket] = await (db as any)
+      .select()
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.id, ticketId),
+          eq(schema.tickets.queueId, queueId),
+          eq(schema.tickets.status, "waiting"),
+        ),
+      )
+      .limit(1);
+
+    if (!ticket) {
+      return c.json({ error: "Ticket not found or not cancellable" }, 404);
+    }
+
+    await (db as any)
+      .update(schema.tickets)
+      .set({ status: "cancelled", completedAt: new Date() })
+      .where(eq(schema.tickets.id, ticketId));
+
+    broadcast(queueId, { type: "queue:update", payload: { queueId } });
+
+    return c.json({ success: true });
+  });
+
   // Get ticket status (public)
   app.get("/:queueId/ticket/:ticketId", async (c) => {
     const queueId = parseInt(c.req.param("queueId"), 10);

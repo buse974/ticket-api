@@ -20,6 +20,7 @@ export const ticketStatusEnum = pgEnum("ticket_status", [
   "current",
   "completed",
   "no_show",
+  "cancelled",
 ]);
 
 // Professionnels (comptes principaux/entreprises)
