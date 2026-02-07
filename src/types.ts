@@ -47,7 +47,7 @@ export interface ProfessionalInfo {
 }
 
 // WebSocket event types
-export type WSEventType = "queue:update" | "ticket:called" | "ticket:next";
+export type WSEventType = "queue:update" | "ticket:called" | "ticket:completed" | "ticket:next";
 
 export interface WSMessage {
   type: WSEventType;

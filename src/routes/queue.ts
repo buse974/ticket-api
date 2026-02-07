@@ -367,6 +367,18 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     }
 
     // Mark current ticket as completed
+    // Get current ticket before completing it
+    const [completingTicket] = await (db as any)
+      .select()
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queueId),
+          eq(schema.tickets.status, "current"),
+        ),
+      )
+      .limit(1);
+
     await (db as any)
       .update(schema.tickets)
       .set({ status: "completed", completedAt: new Date() })
@@ -376,6 +388,14 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
           eq(schema.tickets.status, "current"),
         ),
       );
+
+    // Notify the client their ticket is done
+    if (completingTicket) {
+      broadcast(queueId, {
+        type: "ticket:completed",
+        payload: { id: completingTicket.id, number: completingTicket.number },
+      });
+    }
 
     // Get next waiting ticket
     const waitingTickets = await (db as any)
@@ -416,7 +436,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
 
       broadcast(queueId, {
         type: "ticket:called",
-        payload: { number: next.number },
+        payload: { id: next.id, number: next.number },
       });
     }
 
@@ -452,6 +472,18 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       return c.json({ error: "Queue not found" }, 404);
     }
 
+    // Get current ticket before marking no-show
+    const [noShowTicket] = await (db as any)
+      .select()
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queueId),
+          eq(schema.tickets.status, "current"),
+        ),
+      )
+      .limit(1);
+
     // Mark current ticket as no_show
     await (db as any)
       .update(schema.tickets)
@@ -462,6 +494,14 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
           eq(schema.tickets.status, "current"),
         ),
       );
+
+    // Notify the client their ticket is done
+    if (noShowTicket) {
+      broadcast(queueId, {
+        type: "ticket:completed",
+        payload: { id: noShowTicket.id, number: noShowTicket.number },
+      });
+    }
 
     // Get next waiting ticket
     const waitingTickets = await (db as any)
@@ -502,7 +542,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
 
       broadcast(queueId, {
         type: "ticket:called",
-        payload: { number: next.number },
+        payload: { id: next.id, number: next.number },
       });
     }
 
