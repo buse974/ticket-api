@@ -621,7 +621,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     const stats = await getQueueStats(db, schema, queueId);
     broadcast(queueId, {
       type: "ticket:called",
-      payload: { number: next.number },
+      payload: { id: next.id, number: next.number },
     });
     broadcast(queueId, { type: "queue:update", payload: { queueId, stats } });
 
