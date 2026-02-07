@@ -1,11 +1,15 @@
 import { serve } from "@hono/node-server";
 import { WebSocket } from "ws";
 import { createDb } from "./db/index.js";
+import { runMigrations } from "./db/migrate.js";
 import { createApp } from "./app.js";
 import { setupWebSocket, createBroadcast } from "./websocket.js";
 import { env } from "./env.js";
 
 async function main() {
+  // Run migrations
+  await runMigrations(env.DATABASE_URL);
+
   // Initialize database
   const database = await createDb(env.DATABASE_URL);
   console.log("Connected to PostgreSQL database");
