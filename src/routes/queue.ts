@@ -841,6 +841,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     broadcast(queueId, {
       type: "queue:update",
       payload: {
+        queueId,
         id: queueId,
         currentNumber: queue.currentNumber,
         nextTicket: ticketNumber + 1,
