@@ -22,7 +22,6 @@ const createQueueSchema = z.object({
 const updateQueueSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   isActive: z.boolean().optional(),
-  allowRemoteBooking: z.boolean().optional(),
 });
 
 export type BroadcastFn = (queueId: number, message: WSMessage) => void;
@@ -68,7 +67,6 @@ async function getQueueStats(db: any, schema: any, queueId: number) {
     (t: any) => t.status === "completed",
   ).length;
   const noShow = todayTickets.filter((t: any) => t.status === "no_show").length;
-  const remote = todayTickets.filter((t: any) => t.isRemote).length;
   const totalToday = todayTickets.length;
 
   // Calculate average times
@@ -125,7 +123,6 @@ async function getQueueStats(db: any, schema: any, queueId: number) {
     completed,
     noShow,
     waiting,
-    remote,
     noShowRate: totalToday > 0 ? Math.round((noShow / totalToday) * 100) : 0,
     avgWaitTime,
     avgServiceTime,
@@ -177,7 +174,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
           currentNumber: queue.currentNumber,
           nextTicket: queue.nextTicket,
           isActive: queue.isActive,
-          allowRemoteBooking: queue.allowRemoteBooking,
           stats,
         };
       }),
@@ -222,7 +218,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
           currentNumber: 0,
           nextTicket: 1,
           isActive: true,
-          allowRemoteBooking: true,
         })
         .returning({ id: schema.queues.id });
 
@@ -236,7 +231,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
           currentNumber: 0,
           nextTicket: 1,
           isActive: true,
-          allowRemoteBooking: true,
         },
         201,
       );
@@ -682,7 +676,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       nextTicket: queue.nextTicket,
       waitingCount: Number(waitingResult?.count ?? 0),
       isActive: queue.isActive,
-      allowRemoteBooking: queue.allowRemoteBooking,
       professionalName: professional?.name || "Unknown",
     });
   });
@@ -726,7 +719,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       nextTicket: queue.nextTicket,
       waitingCount: Number(waitingResult?.count ?? 0),
       isActive: queue.isActive,
-      allowRemoteBooking: queue.allowRemoteBooking,
       professionalName: professional?.name || "Unknown",
     });
   });
@@ -737,7 +729,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     const { pushSubscription } = c.req.valid("json");
     const clientIp =
       c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
-    const isRemote = c.req.header("x-remote-booking") === "true";
 
     const [queue] = await (db as any)
       .select()
@@ -753,48 +744,6 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       return c.json({ error: "Queue is closed" }, 400);
     }
 
-    if (isRemote && !queue.allowRemoteBooking) {
-      return c.json({ error: "Remote booking is disabled" }, 400);
-    }
-
-    // Anti-abuse check for remote bookings
-    if (isRemote && clientIp !== "unknown") {
-      const today = getToday();
-      const [ipRecord] = await (db as any)
-        .select()
-        .from(schema.ipTracking)
-        .where(
-          and(
-            eq(schema.ipTracking.queueId, queueId),
-            eq(schema.ipTracking.clientIp, clientIp),
-            eq(schema.ipTracking.date, today),
-          ),
-        )
-        .limit(1);
-
-      if (
-        ipRecord &&
-        ipRecord.ticketCount >= ANTI_ABUSE_LIMITS.maxTicketsPerIpPerDay
-      ) {
-        return c.json({ error: "Daily limit reached for this IP" }, 429);
-      }
-
-      // Update or create IP tracking
-      if (ipRecord) {
-        await (db as any)
-          .update(schema.ipTracking)
-          .set({ ticketCount: ipRecord.ticketCount + 1 })
-          .where(eq(schema.ipTracking.id, ipRecord.id));
-      } else {
-        await (db as any).insert(schema.ipTracking).values({
-          queueId,
-          clientIp,
-          ticketCount: 1,
-          date: today,
-        });
-      }
-    }
-
     const ticketNumber = queue.nextTicket;
 
     // Create ticket
@@ -804,8 +753,8 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
         queueId,
         number: ticketNumber,
         status: "waiting",
-        clientIp: isRemote ? clientIp : null,
-        isRemote,
+        clientIp,
+        isRemote: false,
         pushSubscription: pushSubscription || null,
       })
       .returning({ id: schema.tickets.id });

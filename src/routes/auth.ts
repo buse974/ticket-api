@@ -90,7 +90,6 @@ export function createAuthRoutes(database: Database) {
       currentNumber: 0,
       nextTicket: 1,
       isActive: true,
-      allowRemoteBooking: true,
     });
 
     // Get created professional for response

@@ -124,7 +124,6 @@ export function createProfessionalRoutes(database: Database) {
         currentNumber: queue.currentNumber,
         nextTicket: queue.nextTicket,
         isActive: queue.isActive,
-        allowRemoteBooking: queue.allowRemoteBooking,
       },
       currentTicket: currentTicket || null,
       waitingTickets,

@@ -13,7 +13,6 @@ export interface QueueInfo {
   nextTicket: number;
   waitingCount: number;
   isActive?: boolean;
-  allowRemoteBooking?: boolean;
 }
 
 export interface QueueStats {
@@ -21,7 +20,6 @@ export interface QueueStats {
   completed: number;
   noShow: number;
   waiting: number;
-  remote: number;
   noShowRate: number;
   avgWaitTime: number; // en secondes
   avgServiceTime: number; // en secondes
@@ -84,7 +82,6 @@ export interface CreateQueueRequest {
 export interface UpdateQueueRequest {
   name?: string;
   isActive?: boolean;
-  allowRemoteBooking?: boolean;
 }
 
 // Push notification payload
