@@ -1,8 +1,14 @@
 import { Hono } from "hono";
 import { jwt } from "hono/jwt";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
 import { eq, and, desc } from "drizzle-orm";
 import { env } from "../env.js";
 import { getVapidPublicKey } from "../services/push.service.js";
+import {
+  hashPassword,
+  verifyPassword,
+} from "../services/auth.service.js";
 import type { Database } from "../db/index.js";
 import type { User, Professional } from "../db/schema.js";
 
@@ -58,6 +64,103 @@ export function createProfessionalRoutes(database: Database) {
       name: professional.companyName,
       plan: professional.plan,
     });
+  });
+
+  // Update my profile
+  app.put(
+    "/me",
+    zValidator(
+      "json",
+      z.object({
+        name: z.string().min(1).optional(),
+        email: z.string().email().optional(),
+      }),
+    ),
+    async (c) => {
+      const user = c.get("user");
+      const professional = c.get("professional");
+      const { name, email } = c.req.valid("json");
+
+      if (email && email !== user.email) {
+        const [existing] = await (db as any)
+          .select({ id: schema.users.id })
+          .from(schema.users)
+          .where(eq(schema.users.email, email))
+          .limit(1);
+        if (existing) {
+          return c.json({ error: "Email already in use" }, 409);
+        }
+        await (db as any)
+          .update(schema.users)
+          .set({ email, updatedAt: new Date() })
+          .where(eq(schema.users.id, user.id));
+      }
+
+      if (name) {
+        await (db as any)
+          .update(schema.professionals)
+          .set({ companyName: name, updatedAt: new Date() })
+          .where(eq(schema.professionals.id, professional.id));
+      }
+
+      // Return updated profile
+      const [updatedUser] = await (db as any)
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.id, user.id));
+      const [updatedPro] = await (db as any)
+        .select()
+        .from(schema.professionals)
+        .where(eq(schema.professionals.id, professional.id));
+
+      return c.json({
+        id: updatedPro.id,
+        email: updatedUser.email,
+        name: updatedPro.companyName,
+        plan: updatedPro.plan,
+      });
+    },
+  );
+
+  // Change password
+  app.put(
+    "/password",
+    zValidator(
+      "json",
+      z.object({
+        currentPassword: z.string(),
+        newPassword: z.string().min(6),
+      }),
+    ),
+    async (c) => {
+      const user = c.get("user");
+      const { currentPassword, newPassword } = c.req.valid("json");
+
+      const valid = await verifyPassword(currentPassword, user.password);
+      if (!valid) {
+        return c.json({ error: "Invalid current password" }, 400);
+      }
+
+      const hashed = await hashPassword(newPassword);
+      await (db as any)
+        .update(schema.users)
+        .set({ password: hashed, updatedAt: new Date() })
+        .where(eq(schema.users.id, user.id));
+
+      return c.json({ success: true });
+    },
+  );
+
+  // Delete my account
+  app.delete("/me", async (c) => {
+    const professional = c.get("professional");
+
+    // Cascade delete: professionals → users, queues → tickets (all via DB cascade)
+    await (db as any)
+      .delete(schema.professionals)
+      .where(eq(schema.professionals.id, professional.id));
+
+    return c.json({ success: true });
   });
 
   // Get all my queues
