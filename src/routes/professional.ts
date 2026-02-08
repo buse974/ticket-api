@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { jwt } from "hono/jwt";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import { env } from "../env.js";
 import { getVapidPublicKey } from "../services/push.service.js";
 import {
@@ -261,6 +261,50 @@ export function createProfessionalRoutes(database: Database) {
       name: queue.name,
       url: publicUrl,
     });
+  });
+
+  // Get hourly stats for today (all queues)
+  app.get("/stats/hourly", async (c) => {
+    const professional = c.get("professional");
+    const today = new Date().toISOString().split("T")[0];
+
+    // Get all queue IDs for this professional
+    const queues = await (db as any)
+      .select({ id: schema.queues.id })
+      .from(schema.queues)
+      .where(eq(schema.queues.professionalId, professional.id));
+
+    const queueIds = queues.map((q: any) => q.id);
+
+    if (queueIds.length === 0) {
+      return c.json([]);
+    }
+
+    // Get all tickets today for these queues
+    const tickets = await (db as any)
+      .select({ createdAt: schema.tickets.createdAt })
+      .from(schema.tickets)
+      .where(
+        and(
+          inArray(schema.tickets.queueId, queueIds),
+          gte(schema.tickets.createdAt, new Date(today)),
+        ),
+      );
+
+    // Group by hour
+    const hourly: Record<number, number> = {};
+    for (const t of tickets) {
+      const hour = new Date(t.createdAt).getHours();
+      hourly[hour] = (hourly[hour] || 0) + 1;
+    }
+
+    // Return 8h-22h range
+    const result = [];
+    for (let h = 8; h <= 22; h++) {
+      result.push({ hour: `${h}h`, tickets: hourly[h] || 0 });
+    }
+
+    return c.json(result);
   });
 
   // Get VAPID public key for push notifications
