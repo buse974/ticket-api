@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, and, gt } from "drizzle-orm";
+import crypto from "crypto";
 import {
   hashPassword,
   verifyPassword,
@@ -176,6 +177,83 @@ export function createAuthRoutes(database: Database) {
       },
     });
   });
+
+  // Forgot password - generate reset token
+  app.post(
+    "/forgot-password",
+    zValidator("json", z.object({ email: z.string().email() })),
+    async (c) => {
+      const { email } = c.req.valid("json");
+
+      const [user] = await (db as any)
+        .select()
+        .from(schema.users)
+        .where(eq(schema.users.email, email))
+        .limit(1);
+
+      // Always return success to avoid email enumeration
+      if (!user) {
+        return c.json({ success: true });
+      }
+
+      const resetToken = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+      await (db as any)
+        .update(schema.users)
+        .set({ resetToken, resetTokenExpiresAt: expiresAt })
+        .where(eq(schema.users.id, user.id));
+
+      // TODO: Send email with reset link
+      // For now, log the token (visible in server logs for testing)
+      console.log(`[RESET] Token for ${email}: ${resetToken}`);
+
+      return c.json({ success: true });
+    },
+  );
+
+  // Reset password with token
+  app.post(
+    "/reset-password",
+    zValidator(
+      "json",
+      z.object({
+        token: z.string().min(1),
+        password: z.string().min(6),
+      }),
+    ),
+    async (c) => {
+      const { token, password } = c.req.valid("json");
+
+      const [user] = await (db as any)
+        .select()
+        .from(schema.users)
+        .where(
+          and(
+            eq(schema.users.resetToken, token),
+            gt(schema.users.resetTokenExpiresAt, new Date()),
+          ),
+        )
+        .limit(1);
+
+      if (!user) {
+        return c.json({ error: "Invalid or expired token" }, 400);
+      }
+
+      const hashed = await hashPassword(password);
+      await (db as any)
+        .update(schema.users)
+        .set({
+          password: hashed,
+          resetToken: null,
+          resetTokenExpiresAt: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.users.id, user.id));
+
+      return c.json({ success: true });
+    },
+  );
 
   return app;
 }
