@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq, and, count, sql, gte, desc } from "drizzle-orm";
+import { eq, and, count, sql, gte, lte, desc } from "drizzle-orm";
 import { jwt } from "hono/jwt";
 import { env } from "../env.js";
 import { sendPushNotification } from "../services/push.service.js";
@@ -43,6 +43,166 @@ function generateSlug(name: string): string {
 // Helper: get today's date as YYYY-MM-DD
 function getToday(): string {
   return new Date().toISOString().split("T")[0];
+}
+
+// Helper: resolve period string to {from, to} dates (inclusive start, exclusive end)
+function resolvePeriod(period: string): { from: Date; to: Date; days: number } {
+  const to = new Date();
+  const from = new Date(to);
+  from.setUTCHours(0, 0, 0, 0);
+  to.setUTCHours(0, 0, 0, 0);
+  to.setUTCDate(to.getUTCDate() + 1); // exclusive end = tomorrow 00:00
+
+  let days = 1;
+  if (period === "7d") {
+    days = 7;
+    from.setUTCDate(from.getUTCDate() - 6); // 7 days including today
+  } else if (period === "30d") {
+    days = 30;
+    from.setUTCDate(from.getUTCDate() - 29);
+  }
+
+  return { from, to, days };
+}
+
+// Helper: format date as YYYY-MM-DD (UTC)
+function formatDate(d: Date): string {
+  return d.toISOString().split("T")[0];
+}
+
+// Helper: aggregate tickets into daily stats for a period
+async function getStatsRange(
+  db: any,
+  schema: any,
+  queueId: number,
+  period: string,
+) {
+  const { from, to, days } = resolvePeriod(period);
+
+  const tickets = await db
+    .select()
+    .from(schema.tickets)
+    .where(
+      and(
+        eq(schema.tickets.queueId, queueId),
+        gte(schema.tickets.createdAt, from),
+        lte(schema.tickets.createdAt, to),
+      ),
+    );
+
+  // Initialize buckets for each day
+  const buckets: Record<
+    string,
+    {
+      date: string;
+      total: number;
+      completed: number;
+      noShow: number;
+      cancelled: number;
+      waitTimes: number[];
+      serviceTimes: number[];
+    }
+  > = {};
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(from);
+    d.setUTCDate(from.getUTCDate() + i);
+    const key = formatDate(d);
+    buckets[key] = {
+      date: key,
+      total: 0,
+      completed: 0,
+      noShow: 0,
+      cancelled: 0,
+      waitTimes: [],
+      serviceTimes: [],
+    };
+  }
+
+  let totalWaitTimes: number[] = [];
+  let totalServiceTimes: number[] = [];
+  let total = 0;
+  let completed = 0;
+  let noShow = 0;
+  let cancelled = 0;
+
+  for (const t of tickets) {
+    const key = formatDate(new Date(t.createdAt));
+    const bucket = buckets[key];
+    if (!bucket) continue;
+
+    bucket.total++;
+    total++;
+
+    if (t.status === "completed") {
+      bucket.completed++;
+      completed++;
+    } else if (t.status === "no_show") {
+      bucket.noShow++;
+      noShow++;
+    } else if (t.status === "cancelled") {
+      bucket.cancelled++;
+      cancelled++;
+    }
+
+    if (t.calledAt && t.createdAt) {
+      const waitSec =
+        (new Date(t.calledAt).getTime() - new Date(t.createdAt).getTime()) /
+        1000;
+      if (waitSec >= 0) {
+        bucket.waitTimes.push(waitSec);
+        totalWaitTimes.push(waitSec);
+      }
+    }
+    if (t.completedAt && t.calledAt && t.status === "completed") {
+      const serviceSec =
+        (new Date(t.completedAt).getTime() -
+          new Date(t.calledAt).getTime()) /
+        1000;
+      if (serviceSec >= 0) {
+        bucket.serviceTimes.push(serviceSec);
+        totalServiceTimes.push(serviceSec);
+      }
+    }
+  }
+
+  const avg = (arr: number[]) =>
+    arr.length > 0
+      ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length)
+      : 0;
+
+  const daily = Object.values(buckets)
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((b) => ({
+      date: b.date,
+      total: b.total,
+      completed: b.completed,
+      noShow: b.noShow,
+      cancelled: b.cancelled,
+      avgWaitTime: avg(b.waitTimes),
+      avgServiceTime: avg(b.serviceTimes),
+    }));
+
+  const toExclusive = new Date(to);
+  toExclusive.setUTCDate(toExclusive.getUTCDate() - 1);
+
+  return {
+    range: {
+      from: formatDate(from),
+      to: formatDate(toExclusive),
+      period,
+    },
+    totals: {
+      totalTickets: total,
+      completed,
+      noShow,
+      cancelled,
+      avgWaitTime: avg(totalWaitTimes),
+      avgServiceTime: avg(totalServiceTimes),
+      noShowRate: total > 0 ? Math.round((noShow / total) * 100) : 0,
+    },
+    daily,
+  };
 }
 
 // Helper: calculate queue stats
@@ -310,9 +470,10 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     return c.json({ success: true });
   });
 
-  // Get queue stats
+  // Get queue stats (today by default, or extended over a period)
   app.get("/:id/stats", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
+    const period = c.req.query("period");
     const payload = c.get("jwtPayload");
     const userId = parseInt(payload.sub as string, 10);
     const professionalId = await getProfessionalId(userId);
@@ -336,8 +497,121 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       return c.json({ error: "Queue not found" }, 404);
     }
 
+    // Extended range format (7d, 30d)
+    if (period === "7d" || period === "30d") {
+      const range = await getStatsRange(db, schema, queueId, period);
+      return c.json(range);
+    }
+
+    // Default: legacy today format (backwards compatible)
     const stats = await getQueueStats(db, schema, queueId);
     return c.json(stats);
+  });
+
+  // Get queue history (past tickets, paginated)
+  app.get("/:id/history", jwtMiddleware, async (c) => {
+    const queueId = parseInt(c.req.param("id"), 10);
+    const period = c.req.query("period") ?? "7d";
+    const rawLimit = parseInt(c.req.query("limit") ?? "100", 10);
+    const rawOffset = parseInt(c.req.query("offset") ?? "0", 10);
+    const limit = Math.min(
+      Math.max(1, Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100),
+      500,
+    );
+    const offset = Math.max(
+      0,
+      Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0,
+    );
+
+    if (period !== "7d" && period !== "30d") {
+      return c.json({ error: "Invalid period (7d or 30d)" }, 400);
+    }
+
+    const payload = c.get("jwtPayload");
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
+
+    const [queue] = await (db as any)
+      .select()
+      .from(schema.queues)
+      .where(
+        and(
+          eq(schema.queues.id, queueId),
+          eq(schema.queues.professionalId, professionalId),
+        ),
+      )
+      .limit(1);
+
+    if (!queue) {
+      return c.json({ error: "Queue not found" }, 404);
+    }
+
+    const { from, to } = resolvePeriod(period);
+
+    const [totalResult] = await (db as any)
+      .select({ count: count() })
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queueId),
+          gte(schema.tickets.createdAt, from),
+          lte(schema.tickets.createdAt, to),
+        ),
+      );
+
+    const rows = await (db as any)
+      .select()
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queueId),
+          gte(schema.tickets.createdAt, from),
+          lte(schema.tickets.createdAt, to),
+        ),
+      )
+      .orderBy(desc(schema.tickets.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const tickets = rows.map((t: any) => {
+      let waitTime: number | null = null;
+      let serviceTime: number | null = null;
+      if (t.calledAt && t.createdAt) {
+        waitTime = Math.round(
+          (new Date(t.calledAt).getTime() -
+            new Date(t.createdAt).getTime()) /
+            1000,
+        );
+      }
+      if (t.completedAt && t.calledAt && t.status === "completed") {
+        serviceTime = Math.round(
+          (new Date(t.completedAt).getTime() -
+            new Date(t.calledAt).getTime()) /
+            1000,
+        );
+      }
+      return {
+        id: t.id,
+        number: t.number,
+        status: t.status,
+        createdAt: t.createdAt,
+        calledAt: t.calledAt,
+        completedAt: t.completedAt,
+        isRemote: t.isRemote,
+        waitTime,
+        serviceTime,
+      };
+    });
+
+    return c.json({
+      tickets,
+      total: Number(totalResult?.count ?? 0),
+      limit,
+      offset,
+    });
   });
 
   // Complete current ticket

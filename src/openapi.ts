@@ -169,6 +169,112 @@ export const openApiSpec = {
         },
       },
     },
+    "/api/queue/{id}/stats": {
+      get: {
+        summary: "Get stats for a queue (today or over 7d/30d)",
+        tags: ["Queue"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "integer" },
+          },
+          {
+            name: "period",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["today", "7d", "30d"] },
+            description:
+              "Period (defaults to today, legacy flat format). 7d/30d returns {range, totals, daily[]}.",
+          },
+        ],
+        responses: {
+          "200": { description: "Stats object" },
+          "401": { description: "Unauthorized" },
+          "404": { description: "Queue not found" },
+        },
+      },
+    },
+    "/api/queue/{id}/history": {
+      get: {
+        summary: "Get past tickets of a queue, paginated",
+        tags: ["Queue"],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: "id",
+            in: "path",
+            required: true,
+            schema: { type: "integer" },
+          },
+          {
+            name: "period",
+            in: "query",
+            required: false,
+            schema: { type: "string", enum: ["7d", "30d"], default: "7d" },
+          },
+          {
+            name: "limit",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 1, maximum: 500, default: 100 },
+          },
+          {
+            name: "offset",
+            in: "query",
+            required: false,
+            schema: { type: "integer", minimum: 0, default: 0 },
+          },
+        ],
+        responses: {
+          "200": {
+            description: "Paginated list of tickets",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    tickets: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "integer" },
+                          number: { type: "integer" },
+                          status: { type: "string" },
+                          createdAt: { type: "string", format: "date-time" },
+                          calledAt: {
+                            type: "string",
+                            format: "date-time",
+                            nullable: true,
+                          },
+                          completedAt: {
+                            type: "string",
+                            format: "date-time",
+                            nullable: true,
+                          },
+                          isRemote: { type: "boolean" },
+                          waitTime: { type: "integer", nullable: true },
+                          serviceTime: { type: "integer", nullable: true },
+                        },
+                      },
+                    },
+                    total: { type: "integer" },
+                    limit: { type: "integer" },
+                    offset: { type: "integer" },
+                  },
+                },
+              },
+            },
+          },
+          "400": { description: "Invalid period" },
+          "401": { description: "Unauthorized" },
+          "404": { description: "Queue not found" },
+        },
+      },
+    },
     "/api/professional/queues": {
       get: {
         summary: "Get professional's queues",
