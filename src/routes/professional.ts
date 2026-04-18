@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { jwt } from "hono/jwt";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq, and, desc, gte, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, gte, inArray } from "drizzle-orm";
 import { env } from "../env.js";
 import { getVapidPublicKey } from "../services/push.service.js";
 import {
@@ -207,8 +207,8 @@ export function createProfessionalRoutes(database: Database) {
       )
       .orderBy(schema.tickets.number);
 
-    // Get current ticket
-    const [currentTicket] = await (db as any)
+    // Get all current tickets (multi-current support), oldest called first
+    const currentTickets = await (db as any)
       .select()
       .from(schema.tickets)
       .where(
@@ -217,7 +217,7 @@ export function createProfessionalRoutes(database: Database) {
           eq(schema.tickets.status, "current"),
         ),
       )
-      .limit(1);
+      .orderBy(asc(schema.tickets.calledAt));
 
     return c.json({
       queue: {
@@ -228,7 +228,7 @@ export function createProfessionalRoutes(database: Database) {
         nextTicket: queue.nextTicket,
         isActive: queue.isActive,
       },
-      currentTicket: currentTicket || null,
+      currentTickets,
       waitingTickets,
     });
   });

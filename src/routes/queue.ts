@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { eq, and, count, sql, gte, lte, desc } from "drizzle-orm";
+import { eq, and, count, sql, gte, lte, asc, desc } from "drizzle-orm";
 import { jwt } from "hono/jwt";
 import { env } from "../env.js";
 import { sendPushNotification } from "../services/push.service.js";
@@ -614,9 +614,13 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     });
   });
 
-  // Complete current ticket
-  app.post("/:id/complete", jwtMiddleware, async (c) => {
-    const queueId = parseInt(c.req.param("id"), 10);
+  // Helper: close a specific current ticket with given status and optionally call next
+  async function closeTicketAndMaybeCallNext(
+    c: any,
+    queueId: number,
+    ticketId: number,
+    closeStatus: "completed" | "no_show",
+  ) {
     const payload = c.get("jwtPayload");
     const userId = parseInt(payload.sub as string, 10);
     const professionalId = await getProfessionalId(userId);
@@ -624,7 +628,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       return c.json({ error: "User not found" }, 401);
     }
 
-    // Verify ownership
+    // Verify queue ownership
     const [queue] = await (db as any)
       .select()
       .from(schema.queues)
@@ -640,190 +644,141 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       return c.json({ error: "Queue not found" }, 404);
     }
 
-    // Mark current ticket as completed
-    // Get current ticket before completing it
-    const [completingTicket] = await (db as any)
+    // Fetch the ticket and validate it belongs to the queue + is current
+    const [ticket] = await (db as any)
       .select()
       .from(schema.tickets)
       .where(
         and(
+          eq(schema.tickets.id, ticketId),
           eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "current"),
         ),
       )
       .limit(1);
 
-    await (db as any)
-      .update(schema.tickets)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(
-        and(
-          eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "current"),
-        ),
-      );
-
-    // Notify the client their ticket is done
-    if (completingTicket) {
-      broadcast(queueId, {
-        type: "ticket:completed",
-        payload: { id: completingTicket.id, number: completingTicket.number },
-      });
+    if (!ticket) {
+      return c.json({ error: "Ticket not found" }, 404);
     }
 
-    // Get next waiting ticket
-    const waitingTickets = await (db as any)
-      .select()
-      .from(schema.tickets)
-      .where(
-        and(
-          eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "waiting"),
-        ),
-      )
-      .orderBy(schema.tickets.number)
-      .limit(1);
+    if (ticket.status !== "current") {
+      return c.json({ error: "Ticket is not current" }, 400);
+    }
 
-    let currentTicket = null;
-    if (waitingTickets.length > 0) {
-      const next = waitingTickets[0];
-      await (db as any)
-        .update(schema.tickets)
-        .set({ status: "current", calledAt: new Date() })
-        .where(eq(schema.tickets.id, next.id));
+    // Update ticket to its closing status
+    await (db as any)
+      .update(schema.tickets)
+      .set({ status: closeStatus, completedAt: new Date() })
+      .where(eq(schema.tickets.id, ticket.id));
 
-      await (db as any)
-        .update(schema.queues)
-        .set({ currentNumber: next.number })
-        .where(eq(schema.queues.id, queueId));
+    const closedTicket = {
+      ...ticket,
+      status: closeStatus,
+      completedAt: new Date(),
+    };
 
-      currentTicket = { ...next, status: "current" };
+    // Broadcast completion (keeps existing event name for client compatibility)
+    broadcast(queueId, {
+      type: "ticket:completed",
+      payload: { id: closedTicket.id, number: closedTicket.number },
+    });
 
-      // Send push notification
-      if (next.pushSubscription) {
-        await sendPushNotification(next.pushSubscription, {
-          title: "C'est votre tour !",
-          body: `Ticket n°${next.number} - Présentez-vous maintenant`,
-          ticketNumber: next.number,
+    // Optionally pick the next waiting ticket
+    let nextTicket: any = null;
+    const wantNext = c.req.query("next") === "true";
+    if (wantNext) {
+      const waitingTickets = await (db as any)
+        .select()
+        .from(schema.tickets)
+        .where(
+          and(
+            eq(schema.tickets.queueId, queueId),
+            eq(schema.tickets.status, "waiting"),
+          ),
+        )
+        .orderBy(schema.tickets.number)
+        .limit(1);
+
+      if (waitingTickets.length > 0) {
+        const next = waitingTickets[0];
+        const now = new Date();
+        await (db as any)
+          .update(schema.tickets)
+          .set({ status: "current", calledAt: now })
+          .where(eq(schema.tickets.id, next.id));
+
+        await (db as any)
+          .update(schema.queues)
+          .set({ currentNumber: next.number })
+          .where(eq(schema.queues.id, queueId));
+
+        nextTicket = { ...next, status: "current", calledAt: now };
+
+        if (next.pushSubscription) {
+          await sendPushNotification(next.pushSubscription, {
+            title: "C'est votre tour !",
+            body: `Ticket n°${next.number} - Présentez-vous maintenant`,
+            ticketNumber: next.number,
+          });
+        }
+
+        broadcast(queueId, {
+          type: "ticket:called",
+          payload: { id: next.id, number: next.number },
         });
       }
-
-      broadcast(queueId, {
-        type: "ticket:called",
-        payload: { id: next.id, number: next.number },
-      });
     }
 
     const stats = await getQueueStats(db, schema, queueId);
     broadcast(queueId, { type: "queue:update", payload: { queueId, stats } });
 
-    return c.json({ currentTicket, stats });
+    return { closedTicket, nextTicket, stats };
+  }
+
+  // Complete a specific current ticket (per-ticket API for multi-current support)
+  app.post("/:id/ticket/:ticketId/complete", jwtMiddleware, async (c) => {
+    const queueId = parseInt(c.req.param("id"), 10);
+    const ticketId = parseInt(c.req.param("ticketId"), 10);
+    if (!Number.isFinite(queueId) || !Number.isFinite(ticketId)) {
+      return c.json({ error: "Invalid parameters" }, 400);
+    }
+
+    const result = await closeTicketAndMaybeCallNext(
+      c,
+      queueId,
+      ticketId,
+      "completed",
+    );
+
+    // Error response already returned as c.json(...)
+    if (!("closedTicket" in (result as any))) {
+      return result as any;
+    }
+
+    const { closedTicket, nextTicket, stats } = result as any;
+    return c.json({ completedTicket: closedTicket, nextTicket, stats });
   });
 
-  // Mark current ticket as no-show
-  app.post("/:id/no-show", jwtMiddleware, async (c) => {
+  // Mark a specific current ticket as no-show (per-ticket API for multi-current support)
+  app.post("/:id/ticket/:ticketId/no-show", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
-    const payload = c.get("jwtPayload");
-    const userId = parseInt(payload.sub as string, 10);
-    const professionalId = await getProfessionalId(userId);
-    if (!professionalId) {
-      return c.json({ error: "User not found" }, 401);
+    const ticketId = parseInt(c.req.param("ticketId"), 10);
+    if (!Number.isFinite(queueId) || !Number.isFinite(ticketId)) {
+      return c.json({ error: "Invalid parameters" }, 400);
     }
 
-    // Verify ownership
-    const [queue] = await (db as any)
-      .select()
-      .from(schema.queues)
-      .where(
-        and(
-          eq(schema.queues.id, queueId),
-          eq(schema.queues.professionalId, professionalId),
-        ),
-      )
-      .limit(1);
+    const result = await closeTicketAndMaybeCallNext(
+      c,
+      queueId,
+      ticketId,
+      "no_show",
+    );
 
-    if (!queue) {
-      return c.json({ error: "Queue not found" }, 404);
+    if (!("closedTicket" in (result as any))) {
+      return result as any;
     }
 
-    // Get current ticket before marking no-show
-    const [noShowTicket] = await (db as any)
-      .select()
-      .from(schema.tickets)
-      .where(
-        and(
-          eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "current"),
-        ),
-      )
-      .limit(1);
-
-    // Mark current ticket as no_show
-    await (db as any)
-      .update(schema.tickets)
-      .set({ status: "no_show", completedAt: new Date() })
-      .where(
-        and(
-          eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "current"),
-        ),
-      );
-
-    // Notify the client their ticket is done
-    if (noShowTicket) {
-      broadcast(queueId, {
-        type: "ticket:completed",
-        payload: { id: noShowTicket.id, number: noShowTicket.number },
-      });
-    }
-
-    // Get next waiting ticket
-    const waitingTickets = await (db as any)
-      .select()
-      .from(schema.tickets)
-      .where(
-        and(
-          eq(schema.tickets.queueId, queueId),
-          eq(schema.tickets.status, "waiting"),
-        ),
-      )
-      .orderBy(schema.tickets.number)
-      .limit(1);
-
-    let currentTicket = null;
-    if (waitingTickets.length > 0) {
-      const next = waitingTickets[0];
-      await (db as any)
-        .update(schema.tickets)
-        .set({ status: "current", calledAt: new Date() })
-        .where(eq(schema.tickets.id, next.id));
-
-      await (db as any)
-        .update(schema.queues)
-        .set({ currentNumber: next.number })
-        .where(eq(schema.queues.id, queueId));
-
-      currentTicket = { ...next, status: "current" };
-
-      // Send push notification
-      if (next.pushSubscription) {
-        await sendPushNotification(next.pushSubscription, {
-          title: "C'est votre tour !",
-          body: `Ticket n°${next.number} - Présentez-vous maintenant`,
-          ticketNumber: next.number,
-        });
-      }
-
-      broadcast(queueId, {
-        type: "ticket:called",
-        payload: { id: next.id, number: next.number },
-      });
-    }
-
-    const stats = await getQueueStats(db, schema, queueId);
-    broadcast(queueId, { type: "queue:update", payload: { queueId, stats } });
-
-    return c.json({ currentTicket, stats });
+    const { closedTicket, nextTicket, stats } = result as any;
+    return c.json({ noShowTicket: closedTicket, nextTicket, stats });
   });
 
   // Call next ticket (without completing current)
@@ -975,6 +930,19 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
         ),
       );
 
+    // Get all current tickets (oldest called first) for multi-current support
+    const currentRows = await (db as any)
+      .select({ number: schema.tickets.number })
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queueId),
+          eq(schema.tickets.status, "current"),
+        ),
+      )
+      .orderBy(asc(schema.tickets.calledAt));
+    const currentNumbers = currentRows.map((t: any) => t.number);
+
     // Get professional name
     const [professional] = await (db as any)
       .select()
@@ -987,6 +955,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       name: queue.name,
       slug: queue.slug,
       currentNumber: queue.currentNumber,
+      currentNumbers,
       nextTicket: queue.nextTicket,
       waitingCount: Number(waitingResult?.count ?? 0),
       isActive: queue.isActive,
@@ -1018,6 +987,19 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
         ),
       );
 
+    // Get all current tickets (oldest called first) for multi-current support
+    const currentRows = await (db as any)
+      .select({ number: schema.tickets.number })
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.queueId, queue.id),
+          eq(schema.tickets.status, "current"),
+        ),
+      )
+      .orderBy(asc(schema.tickets.calledAt));
+    const currentNumbers = currentRows.map((t: any) => t.number);
+
     // Get professional name
     const [professional] = await (db as any)
       .select()
@@ -1030,6 +1012,7 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
       name: queue.name,
       slug: queue.slug,
       currentNumber: queue.currentNumber,
+      currentNumbers,
       nextTicket: queue.nextTicket,
       waitingCount: Number(waitingResult?.count ?? 0),
       isActive: queue.isActive,
