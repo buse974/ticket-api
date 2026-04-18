@@ -857,6 +857,84 @@ export function createQueueRoutes(database: Database, broadcast: BroadcastFn) {
     return c.json({ currentTicket: { ...next, status: "current" }, stats });
   });
 
+  // Call a specific ticket by id (multi-serving)
+  app.post("/:id/ticket/:ticketId/call", jwtMiddleware, async (c) => {
+    const queueId = parseInt(c.req.param("id"), 10);
+    const ticketId = parseInt(c.req.param("ticketId"), 10);
+    const payload = c.get("jwtPayload");
+    const userId = parseInt(payload.sub as string, 10);
+    const professionalId = await getProfessionalId(userId);
+    if (!professionalId) {
+      return c.json({ error: "User not found" }, 401);
+    }
+
+    // Verify ownership
+    const [queue] = await (db as any)
+      .select()
+      .from(schema.queues)
+      .where(
+        and(
+          eq(schema.queues.id, queueId),
+          eq(schema.queues.professionalId, professionalId),
+        ),
+      )
+      .limit(1);
+
+    if (!queue) {
+      return c.json({ error: "Queue not found" }, 404);
+    }
+
+    // Get the specific ticket
+    const [ticket] = await (db as any)
+      .select()
+      .from(schema.tickets)
+      .where(
+        and(
+          eq(schema.tickets.id, ticketId),
+          eq(schema.tickets.queueId, queueId),
+        ),
+      )
+      .limit(1);
+
+    if (!ticket) {
+      return c.json({ error: "Ticket not found" }, 404);
+    }
+
+    if (ticket.status !== "waiting") {
+      return c.json({ error: "Ticket not waiting" }, 400);
+    }
+
+    // Update ticket to current
+    await (db as any)
+      .update(schema.tickets)
+      .set({ status: "current", calledAt: new Date() })
+      .where(eq(schema.tickets.id, ticket.id));
+
+    // Update queue current number
+    await (db as any)
+      .update(schema.queues)
+      .set({ currentNumber: ticket.number })
+      .where(eq(schema.queues.id, queueId));
+
+    // Send push notification
+    if (ticket.pushSubscription) {
+      await sendPushNotification(ticket.pushSubscription, {
+        title: "C'est votre tour !",
+        body: `Ticket n°${ticket.number} - Présentez-vous maintenant`,
+        ticketNumber: ticket.number,
+      });
+    }
+
+    const stats = await getQueueStats(db, schema, queueId);
+    broadcast(queueId, {
+      type: "ticket:called",
+      payload: { id: ticket.id, number: ticket.number },
+    });
+    broadcast(queueId, { type: "queue:update", payload: { queueId, stats } });
+
+    return c.json({ currentTicket: { ...ticket, status: "current" }, stats });
+  });
+
   // Reset queue (delete all tickets, reset counters)
   app.post("/:id/reset", jwtMiddleware, async (c) => {
     const queueId = parseInt(c.req.param("id"), 10);
